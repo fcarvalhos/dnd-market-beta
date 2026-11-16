@@ -1,4 +1,6 @@
-# The Gilded Ledger
+# The Gilded Ledger (beta)
+
+Beta copy of [dnd-market](https://github.com/fcarvalhos/dnd-market). In this version the Market has no Abilities & Boons or Homebrew Tomes sections: checks use only the character sheet.
 
 A D&D market companion for the table's downtime rules. It rolls the checks to find **magic item vendors**, **crafting material suppliers** and **buyers for loot**. It spends your character's abilities automatically to maximize your odds, and posts the result to a Discord channel.
 

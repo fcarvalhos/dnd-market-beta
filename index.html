@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Gilded Ledger</title>
+  <title>The Gilded Ledger (beta)</title>
   <meta name="description" content="Roll for magic item vendors, crafting materials and loot buyers, and track the party experience and faction standing.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,3 93,27 93,73 50,97 7,73 7,27' fill='%23d4af6a'/><text x='50' y='64' font-size='42' text-anchor='middle' fill='%23140e09' font-family='serif' font-weight='bold'>20</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,7 +16,7 @@
   <div class="embers" aria-hidden="true"></div>
   <header class="hero">
     <div class="hero-ornament" aria-hidden="true">✦ ━━━━ ⚜ ━━━━ ✦</div>
-    <h1>The Gilded Ledger</h1>
+    <h1>The Gilded Ledger <small class="beta">beta</small></h1>
     <p class="tagline">Markets, experience, factions &amp; travels of the company</p>
   </header>
 
@@ -30,15 +30,41 @@
   <main class="layout" id="view-market">
     <aside class="side">
       <section class="card" id="character"></section>
-      <section class="card" id="abilities"></section>
-      <section class="card" id="homebrew"></section>
       <section class="card" id="settings"></section>
+      <details class="card rules">
+      <summary><span class="glyph">⚖</span> Market Rules</summary>
+      <div class="rules-body">
+        <h3>🔮 Buying magic items &amp; crafting materials</h3>
+        <ul>
+          <li>Only in cities of the Kingdom. Searching takes at least <b>7 days</b> and <b>100 GP</b>.</li>
+          <li>Only Common and Uncommon items are sold on the Material Plane. Rarer items need another plane: at least <b>14 days</b> and <b>200 GP</b>.</li>
+          <li>Charisma (<b>Persuasion</b>) vs DC: Common 10 · Uncommon 15 · Rare 20 · Very Rare 25 · Legendary 30.</li>
+          <li>+1 for every extra 7 days and +1 for every extra 100 GP, up to <b>+10</b>.</li>
+          <li>Price per the <a href="https://sanemagicmarket.com/pricing" target="_blank" rel="noopener">Sane Magic Market</a> table plus the base mundane item. Consumables cost half.</li>
+          <li>Crafting materials follow the same rule (DC by the rarity of the item to craft) and must be bought before crafting.</li>
+          <li>On a failure, you can't search for the same item again for <b>30 days</b>.</li>
+        </ul>
+        <h3>💎 Selling magic items</h3>
+        <ul>
+          <li>Buyer search: Persuasion or Investigation vs the rarity DC. <b>Once per day.</b></li>
+          <li>Negotiation: Persuasion or Deception vs the rarity DC. Success = full value, failure = half, natural 20 = 150%.</li>
+        </ul>
+        <h3>⚒️ Selling mundane items &amp; materials</h3>
+        <ul>
+          <li>Mundane items: no search needed. Persuasion or Deception vs DC 13. Success = full value, failure = half, natural 20 = 150%.</li>
+          <li>Mundane raw materials sell for 100%. Beat DC 15 to sell for 150%. A natural 20 adds nothing extra.</li>
+          <li>The DM may step in for cursed, unique or restricted goods.</li>
+        </ul>
+      </div>
+    </details>
     </aside>
 
     <section class="main">
       <nav class="modes" id="modes" role="tablist" aria-label="Market activity"></nav>
-      <section class="card objective" id="objective"></section>
-      <section class="card odds" id="odds"></section>
+      <div class="plan-row">
+        <section class="card objective" id="objective"></section>
+        <section class="card odds" id="odds"></section>
+      </div>
       <div class="roll-area">
         <button type="button" class="roll-btn" id="roll-btn" data-action="roll">
           <span class="roll-die" aria-hidden="true">⬢</span> Roll the Bones
@@ -46,33 +72,6 @@
       </div>
       <section class="card parchment" id="result" aria-live="polite"></section>
       <section class="card" id="history"></section>
-
-      <details class="card rules">
-        <summary><span class="glyph">⚖</span> Market Rules</summary>
-        <div class="rules-body">
-          <h3>🔮 Buying magic items &amp; crafting materials</h3>
-          <ul>
-            <li>Only in cities of the Kingdom. Searching takes at least <b>7 days</b> and <b>100 GP</b>.</li>
-            <li>Only Common and Uncommon items are sold on the Material Plane. Rarer items need another plane: at least <b>14 days</b> and <b>200 GP</b>.</li>
-            <li>Charisma (<b>Persuasion</b>) vs DC: Common 10 · Uncommon 15 · Rare 20 · Very Rare 25 · Legendary 30.</li>
-            <li>+1 for every extra 7 days and +1 for every extra 100 GP, up to <b>+10</b>.</li>
-            <li>Price per the <a href="https://sanemagicmarket.com/pricing" target="_blank" rel="noopener">Sane Magic Market</a> table plus the base mundane item. Consumables cost half.</li>
-            <li>Crafting materials follow the same rule (DC by the rarity of the item to craft) and must be bought before crafting.</li>
-            <li>On a failure, you can't search for the same item again for <b>30 days</b>.</li>
-          </ul>
-          <h3>💎 Selling magic items</h3>
-          <ul>
-            <li>Buyer search: Persuasion or Investigation vs the rarity DC. <b>Once per day.</b></li>
-            <li>Negotiation: Persuasion or Deception vs the rarity DC. Success = full value, failure = half, natural 20 = 150%.</li>
-          </ul>
-          <h3>⚒️ Selling mundane items &amp; materials</h3>
-          <ul>
-            <li>Mundane items: no search needed. Persuasion or Deception vs DC 13. Success = full value, failure = half, natural 20 = 150%.</li>
-            <li>Mundane raw materials sell for 100%. Beat DC 15 to sell for 150%. A natural 20 adds nothing extra.</li>
-            <li>The DM may step in for cursed, unique or restricted goods.</li>
-          </ul>
-        </div>
-      </details>
     </section>
   </main>
   <section class="tracker" id="view-xp" aria-label="Experience" hidden></section>
@@ -80,7 +79,7 @@
   <section class="tracker" id="view-travel" aria-label="Travel" hidden></section>
   <datalist id="roster-names"></datalist>
 
-  <footer class="foot">Rolls happen in your browser. Your character, abilities, webhook and DM keys are saved on this device only. Experience and faction standing sync with the table's Google Sheets.</footer>
+  <footer class="foot">Rolls happen in your browser. Your character, webhook and DM keys are saved on this device only. Experience and faction standing sync with the table's Google Sheets.</footer>
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script type="module" src="js/app.js"></script>

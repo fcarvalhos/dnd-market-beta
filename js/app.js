@@ -1,5 +1,4 @@
 import { RARITIES, rarityOf, searchBonus, staticModifier, SKILLS, SKILL_LABEL, ABILITY_LABEL, fmt, num } from './engine.js';
-import { BUILTIN, defaultMax, parseHomebrew, describeEffect } from './abilities.js';
 import { MODES, runFlow, estimateFlow, buildRecord, recordText, isMagicSale } from './flows.js';
 import { isWebhook, postRecord, postTest, BUILT_IN } from './discord.js';
 import { esc, toast } from './sheet.js';
@@ -63,34 +62,8 @@ function setPath(path, v) {
 
 // ---------- Abilities ----------
 
-function buildAbilities() {
-  const ch = state.character;
-  const list = [];
-  for (const def of BUILTIN) {
-    const s = state.abilities[def.id] || {};
-    const limited = def.max != null;
-    const max = limited ? num(s.max ?? defaultMax(def, ch)) : null;
-    const params = { ...Object.fromEntries((def.params || []).map((p) => [p.key, p.default ?? ''])), ...(s.params || {}) };
-    list.push({
-      id: def.id, name: def.name, source: def.source, desc: def.desc, cost: def.cost, usesLabel: def.usesLabel || 'uses',
-      def, enabled: !!s.enabled, max, uses: limited ? num(s.uses ?? max) : null, params, effects: def.effects(params, ch),
-    });
-  }
-  for (const hb of state.homebrew) {
-    for (const en of hb.entries) {
-      if (!en.effects.length) continue;
-      const id = `hb_${hb.id}_${en.id}`;
-      const s = state.abilities[id] || {};
-      const max = en.max == null ? null : num(s.max ?? en.max);
-      list.push({
-        id, name: en.name, source: `${hb.source} · ${en.kind}`, desc: en.summary || en.effects.map(describeEffect).join('; '),
-        cost: en.cost, usesLabel: 'uses', homebrew: hb.id, enabled: s.enabled ?? true, max,
-        uses: max == null ? null : num(s.uses ?? max), params: {}, effects: en.effects,
-      });
-    }
-  }
-  return list;
-}
+// Beta: abilities and homebrew are removed, so checks use only the character sheet.
+const buildAbilities = () => [];
 const parsePortent = (s) => String(s || '').split(/[^\d]+/).map(Number).filter((n) => n >= 1 && n <= 20);
 function buildResources(list) {
   const uses = {};
@@ -139,97 +112,6 @@ function renderCharacter() {
     <p class="hint">Ability <em>modifiers</em>, not scores.</p>
     ${Object.keys(SKILLS).map(skillRow).join('')}
     <label class="field inline">Other bonus to market checks ${numInput('character.misc', 'class="small"')}</label>`;
-}
-
-function paramInput(a, p) {
-  const path = `abilities.${a.id}.params.${p.key}`;
-  const v = a.params[p.key] ?? '';
-  if (p.type === 'select') {
-    return `<label class="mini">${esc(p.label)} <select data-bind="${path}" data-rerender="derived">${p.options.map((o) => `<option value="${o}" ${String(v) === String(o) ? 'selected' : ''}>d${o}</option>`).join('')}</select></label>`;
-  }
-  return `<label class="mini">${esc(p.label)} <input type="${p.type === 'number' ? 'number' : 'text'}" data-bind="${path}" ${p.type === 'number' ? 'data-type="num"' : ''} value="${esc(v)}" placeholder="${esc(p.placeholder || '')}" class="${p.type === 'number' ? 'small' : ''}"></label>`;
-}
-
-function abilityCard(a) {
-  const timing = a.effects[0]?.timing || 'passive';
-  const tag = { passive: 'Always', pre: 'Before roll', reactive: 'On a fail' }[timing];
-  const extras = [];
-  if (a.enabled && a.max != null) {
-    extras.push(`<label class="mini">${esc(a.usesLabel)} ${numInput(`abilities.${a.id}.uses`, 'class="small" min="0"', a.uses)} / ${numInput(`abilities.${a.id}.max`, 'class="small" min="0"', a.max)}</label>`);
-  }
-  if (a.enabled && a.def?.params) extras.push(...a.def.params.map((p) => paramInput(a, p)));
-  const spent = a.enabled && a.max != null && a.uses <= 0;
-  return `
-    <div class="ability ${a.enabled ? 'on' : ''} ${spent ? 'spent' : ''} t-${timing}">
-      <label class="ability-head">
-        <input type="checkbox" data-bind="abilities.${a.id}.enabled" data-type="bool" data-rerender="abilities" ${a.enabled ? 'checked' : ''}>
-        <span class="rune" aria-hidden="true"></span>
-        <span class="ab-name">${esc(a.name)}</span>
-        <span class="ab-tag">${tag}</span>
-      </label>
-      <p class="ab-src">${esc(a.source)}</p>
-      <p class="ab-desc">${esc(a.desc)}</p>
-      ${extras.length ? `<div class="ab-extras">${extras.join('')}</div>` : ''}
-      ${spent ? '<p class="ab-warn">No uses left. A long rest restores them.</p>' : ''}
-    </div>`;
-}
-
-function renderAbilities() {
-  const list = buildAbilities();
-  const builtins = list.filter((a) => !a.homebrew);
-  const hb = list.filter((a) => a.homebrew);
-  $('#abilities').innerHTML = `
-    <h2><span class="glyph">✧</span> Abilities &amp; Boons</h2>
-    <p class="hint">Tick what your character can use. The ledger spends them automatically: free help first, then whatever is most likely to turn a failure into a success, cheapest first.</p>
-    <div class="row-between">
-      <label class="field inline">Strategy
-        <select data-bind="settings.strategy" data-rerender="derived">
-          <option value="max" ${state.settings.strategy === 'max' ? 'selected' : ''}>Maximize success</option>
-          <option value="conserve" ${state.settings.strategy === 'conserve' ? 'selected' : ''}>Conserve resources</option>
-        </select>
-      </label>
-      <button type="button" class="btn ghost" data-action="long-rest">☾ Long rest</button>
-    </div>
-    <div class="ability-list">${builtins.map(abilityCard).join('')}</div>
-    ${hb.length ? `<h3 class="sub">From your homebrew</h3><div class="ability-list">${hb.map(abilityCard).join('')}</div>` : ''}`;
-}
-
-function renderHomebrew() {
-  const files = state.homebrew;
-  $('#homebrew').innerHTML = `
-    <h2><span class="glyph">📜</span> Homebrew Tomes</h2>
-    <p class="hint">Upload JSON with classes, subclasses, heritages, feats, items or spells that affect Persuasion, Deception or Investigation. Files from the dnd-sheet app also work.</p>
-    <label class="dropzone" id="dropzone">
-      <input type="file" accept=".json,application/json" multiple id="file-input">
-      <span class="drop-icon">⇪</span>
-      <span>Drop .json files here or <u>browse</u></span>
-    </label>
-    <p class="hint"><a href="examples/market-homebrew-example.json" download>Download an example file</a> · <a href="#format" data-action="show-format">Format guide</a></p>
-    <div id="format-guide" class="format-guide" hidden>
-<pre>{
-  "format": "dnd-market-content", "version": 1,
-  "source": "My homebrew",
-  "entries": [
-    { "kind": "feat", "name": "Silver Merchant",
-      "summary": "+2 to Persuasion; 1/day add 1d6 after failing.",
-      "uses": 1,
-      "effects": [
-        { "type": "bonus", "value": 2, "skills": ["persuasion"] },
-        { "type": "bonus", "value": "1d6", "timing": "reactive" }
-      ] }
-  ]
-}</pre>
-      <p><b>type</b>: bonus (number, "cha"/"int"/"wis", "prof" or "1d6") · advantage · reroll (keep "new" or "best") · min-roll · proficiency (level: proficient / expertise / half) · set-roll · reroll-ones.<br>
-      <b>timing</b>: passive (default) · pre (before the roll) · reactive (after a failed roll).<br>
-      <b>skills</b>: persuasion, deception, investigation, cha, int; leave it out to apply to all checks.<br>
-      An entry named like a built-in ability (e.g. "Lucky") with no effects just turns that ability on.</p>
-    </div>
-    ${files.length ? `<ul class="tome-list">${files.map((f) => `
-      <li class="tome">
-        <div class="row-between"><strong>${esc(f.source)}</strong><button type="button" class="btn tiny danger" data-action="remove-homebrew" data-id="${f.id}" aria-label="Remove ${esc(f.source)}">✕</button></div>
-        <small>${esc(f.fileName)} · ${f.entries.length} entr${f.entries.length === 1 ? 'y' : 'ies'}</small>
-        <ul>${f.entries.map((e) => `<li><span class="kind">${esc(e.kind)}</span> ${esc(e.name)}${e.effects.length ? `: <em>${esc(e.effects.map(describeEffect).join('; '))}</em>` : ' <em class="muted">(no effect on market checks)</em>'}</li>`).join('')}</ul>
-      </li>`).join('')}</ul>` : ''}`;
 }
 
 function renderSettings(status = '') {
@@ -396,9 +278,7 @@ function renderOdds() {
   const mode = state.mode;
   const f = state.forms[mode];
   const c = ctx();
-  const noAb = { ...c, abilities: [], resources: { uses: {}, portent: {} } };
   const est = estimateFlow(mode, f, c, 2500);
-  const base = estimateFlow(mode, f, noAb, 1500);
   let html = '';
   const meter = (p, label, sub) => `
     <div class="meter-wrap">
@@ -407,7 +287,7 @@ function renderOdds() {
       ${sub ? `<small>${sub}</small>` : ''}
     </div>`;
   if (mode === 'buyMagic' || mode === 'buyMaterials') {
-    html += meter(est.p, 'Chance to find a vendor', `${pct(base.p)} without abilities`);
+    html += meter(est.p, 'Chance to find a vendor');
     const sb = searchBonus(f.rarity, f.days, f.gp);
     const chips = [];
     for (let b = 0; b <= 10; b++) {
@@ -419,21 +299,21 @@ function renderOdds() {
     html += `<p class="chips-title">Search bonus vs. chance <small>(click to set the gold)</small></p><div class="chips">${chips.join('')}</div>`;
   } else if (isMagicSale(mode, f)) {
     const t = est.tiers;
-    html += meter(1 - t.fail, 'Chance to find a buyer and sell', `${pct(1 - base.tiers.fail)} without abilities`);
+    html += meter(1 - t.fail, 'Chance to find a buyer and sell');
     html += tierBar([[t.great, 'great', '150%'], [t.success, 'success', '100%'], [t.partial, 'partial', '50%'], [t.fail, 'fail', 'no buyer']]);
     html += `<p class="expect">Expected value: <b>${Math.round(est.expected)} GP</b> of ${num(f.value)} GP</p>`;
   } else if (mode === 'sellMundane') {
     const t = est.tiers;
-    html += meter(t.great + t.success, 'Chance to sell at full value or better', `${pct(base.tiers.great + base.tiers.success)} without abilities`);
+    html += meter(t.great + t.success, 'Chance to sell at full value or better');
     html += tierBar([[t.great, 'great', '150%'], [t.success, 'success', '100%'], [t.partial, 'partial', '50%']]);
     html += `<p class="expect">Expected value: <b>${Math.round(est.expected)} GP</b> of ${num(f.value)} GP</p>`;
   } else {
     const t = est.tiers;
-    html += meter(t.great, 'Chance to sell at 150%', `${pct(base.tiers.great)} without abilities`);
+    html += meter(t.great, 'Chance to sell at 150%');
     html += `<p class="expect">Expected value: <b>${Math.round(est.expected)} GP</b> of ${num(f.value)} GP</p>`;
   }
   const odds = $('#odds');
-  odds.innerHTML = `<h2><span class="glyph">☉</span> The Omens</h2>${html}<p class="hint">Estimated from thousands of simulated rolls using your current abilities and strategy.</p>`;
+  odds.innerHTML = `<h2><span class="glyph">☉</span> The Omens</h2>${html}<p class="hint">Estimated from thousands of simulated rolls.</p>`;
   odds.classList.remove('busy');
 }
 const tierBar = (rows) => `<div class="tiers">${rows.filter(([p]) => p > 0.0005).map(([p, cls, l]) => `<div class="tier ${cls}" style="flex:${p}" title="${l}: ${pct(p)}"><span>${l} ${pct(p)}</span></div>`).join('')}</div>`;
@@ -468,7 +348,7 @@ function checkCard(c, i) {
         </div>
       </div>
       <ul class="parts">${c.parts.map((p) => `<li class="${p.rolled ? 'rolled' : ''}">${esc(p.label)} <b>${fmt(p.value)}</b></li>`).join('')}</ul>
-      ${c.used.length ? `<div class="used"><span>Abilities used:</span> ${c.used.map((u) => `<span class="used-chip" title="${esc(u.detail)}">✦ ${esc(u.name)}: ${esc(u.detail)}</span>`).join('')}</div>` : '<div class="used muted">No abilities were needed.</div>'}
+      ${c.used.length ? `<div class="used"><span>Abilities used:</span> ${c.used.map((u) => `<span class="used-chip" title="${esc(u.detail)}">✦ ${esc(u.name)}: ${esc(u.detail)}</span>`).join('')}</div>` : ''}
       <details><summary>Roll log</summary><ol class="steps">${c.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></details>
     </article>`;
 }
@@ -484,7 +364,7 @@ function discordStatus(rec) {
 function renderResult(rec, animate = false) {
   const el = $('#result');
   if (!rec) {
-    el.innerHTML = `<div class="empty"><div class="empty-sigil">⚖</div><p>Set your objective and roll. The outcome, dice and abilities used will appear here.</p></div>`;
+    el.innerHTML = `<div class="empty"><div class="empty-sigil">⚖</div><p>Set your objective and roll. The outcome and the dice will appear here.</p></div>`;
     return;
   }
   const o = rec.outcome;
@@ -552,7 +432,6 @@ function doRoll() {
   state.lastResultId = rec.id;
   save();
   renderResult(rec, true);
-  renderAbilities();
   renderHistory();
   refreshDerived();
   if (state.settings.autoPost && isWebhook(hook())) postRec(rec);
@@ -584,30 +463,8 @@ async function copyText(s) {
   }
 }
 
-async function importFiles(files) {
-  for (const file of files) {
-    try {
-      const json = JSON.parse(await file.text());
-      const parsed = parseHomebrew(json, file.name);
-      const id = Math.random().toString(36).slice(2, 8);
-      state.homebrew.push({ id, ...parsed });
-      for (const bid of parsed.recognized) (state.abilities[bid] ||= {}).enabled = true;
-      const active = parsed.entries.filter((e) => e.effects.length).length;
-      toast(`${parsed.source}: ${parsed.entries.length} entries, ${active} affect market checks${parsed.recognized.length ? `, turned on ${parsed.recognized.length} built-in` : ''}.`, 'ok');
-      parsed.warnings.forEach((w) => toast(w));
-    } catch (e) {
-      toast(`${file.name}: ${e.message}`, 'bad');
-    }
-  }
-  save();
-  renderHomebrew();
-  renderAbilities();
-  refreshDerived();
-}
-
 function rerender(what) {
   for (const w of what.split(',')) {
-    if (w === 'abilities') renderAbilities();
     if (w === 'objective') {
       const f = state.forms[state.mode];
       if (state.mode === 'buyMagic' || state.mode === 'buyMaterials') {
@@ -658,13 +515,6 @@ document.addEventListener('click', async (ev) => {
     case 'mode': state.mode = b.dataset.mode; save(); renderModes(); renderObjective(); refreshDerived(); break;
     case 'roll': doRoll(); break;
     case 'set-bonus': state.forms[state.mode].gp = Number(b.dataset.gp); save(); renderObjective(); refreshDerived(); break;
-    case 'long-rest':
-      for (const ab of buildAbilities()) if (ab.max != null) (state.abilities[ab.id] ||= {}).uses = ab.max;
-      save(); renderAbilities(); refreshDerived(); toast('A long rest restores your strength. Uses refreshed.', 'ok'); break;
-    case 'remove-homebrew':
-      state.homebrew = state.homebrew.filter((h) => h.id !== b.dataset.id);
-      save(); renderHomebrew(); renderAbilities(); refreshDerived(); break;
-    case 'show-format': ev.preventDefault(); $('#format-guide').hidden = !$('#format-guide').hidden; break;
     case 'toggle-webhook': { const i = $('#webhook-input'); i.type = i.type === 'password' ? 'text' : 'password'; break; }
     case 'test-webhook':
       try { await postTest(hook(), state.character.name); toast('Test raven delivered ✉', 'ok'); renderSettings('● Connected, test message sent'); } catch (e) { toast(e.message, 'bad'); renderSettings(`● ${e.message}`); }
@@ -683,21 +533,8 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-document.addEventListener('change', (ev) => { if (ev.target.id === 'file-input') { importFiles([...ev.target.files]); ev.target.value = ''; } });
-document.addEventListener('dragover', (ev) => { const dz = ev.target.closest?.('#dropzone'); if (dz) { ev.preventDefault(); dz.classList.add('over'); } });
-document.addEventListener('dragleave', (ev) => { const dz = ev.target.closest?.('#dropzone'); if (dz) dz.classList.remove('over'); });
-document.addEventListener('drop', (ev) => {
-  const dz = ev.target.closest?.('#dropzone');
-  if (!dz) return;
-  ev.preventDefault();
-  dz.classList.remove('over');
-  importFiles([...ev.dataTransfer.files].filter((f) => /\.json$/i.test(f.name) || f.type === 'application/json'));
-});
-
 // ---------- Boot ----------
 renderCharacter();
-renderAbilities();
-renderHomebrew();
 renderSettings();
 renderModes();
 renderObjective();

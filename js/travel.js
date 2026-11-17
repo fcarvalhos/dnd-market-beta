@@ -2,6 +2,7 @@
 // post the travel log to Discord and roll the daily "Viagens Agitadas" events.
 import { esc, uid, toast, getKey, askKey, sheet, shell, tabs, setStatus } from './sheet.js';
 import { isWebhook, BUILT_IN } from './discord.js';
+import { buildGraph, nearest, trace } from './roads.js';
 
 const W = 4763;
 const H = 3185;
@@ -27,9 +28,11 @@ export const METHODS = {
   griffon: { name: 'Griffon (fly 80 ft) · 2024', pt: 'Grifo', mi: 64, speed: 80, hours: 8, cost: 55, mountCost: 10 },
   pegasus: { name: 'Pegasus (fly 90 ft) · 2024', pt: 'Pégaso', mi: 72, speed: 90, hours: 8, cost: 55, mountCost: 10 },
   phantom: { name: 'Phantom Steed (13 mph) · 2024', pt: 'Corcel Fantasma', mi: 104, speed: 130, hours: 8, cost: 55 },
-  custom: { name: 'Custom…', pt: '', mi: 24, speed: 30, hours: 8, cost: 55 },
+  custom: { name: 'Custom…', pt: '', mi: [32, 24], speed: 30, hours: 8, cost: 55 },
 };
-const methodMiles = (k, terrain) => { const { mi } = METHODS[k]; return Array.isArray(mi) ? mi[terrain === 'off' ? 1 : 0] : mi; };
+// Methods with a road and an off-road pace follow the road network; ships and flyers go in straight lines at one pace.
+const usesRoads = (k) => Array.isArray(METHODS[k]?.mi);
+const paces = (k) => (usesRoads(k) ? METHODS[k].mi : [METHODS[k].mi, METHODS[k].mi]);
 
 // 1d10 event, then 1d2: 1 = setback, 2 = opportunity. 1-5: nothing happens.
 const EVENTS = {
@@ -41,7 +44,11 @@ const EVENTS = {
 };
 
 export const routeMiles = (pts) => pts.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0) * MI_PER_PX;
-export const daysFor = (miles, perDay) => (perDay > 0 ? Math.ceil(miles / perDay) : 0);
+/** Days for a route that is part road and part off-road: the fractions of a day add up, then round up once. */
+export function daysFor(roadMi, offMi, roadPace, offPace) {
+  if ((roadMi > 0 && !(roadPace > 0)) || (offMi > 0 && !(offPace > 0))) return 0;
+  return Math.ceil((roadMi > 0 ? roadMi / roadPace : 0) + (offMi > 0 ? offMi / offPace : 0) - 1e-9);
+}
 
 /** Advances the travel one day: eats supplies and applies the rolled event. */
 export function applyDay(t, d10, d2) {
@@ -66,7 +73,10 @@ export function applyDay(t, d10, d2) {
 const money = (cp) => [[100, 'gp'], [10, 'sp'], [1, 'cp']].map(([v, u]) => { const n = Math.floor(cp / v); cp -= n * v; return n ? `${n} ${u}` : ''; }).filter(Boolean).join(' ') || '0 gp';
 const round = (n) => Math.round(n).toLocaleString('en-US');
 const supplyText = (list) => list.filter((s) => s.name && s.qty > 0).map((s) => `${s.qty} ${s.name}`).join(', ') || 'Nenhuma';
-const transport = (t) => `${t.methodName}${Array.isArray(METHODS[t.method]?.mi) ? (t.terrain === 'off' ? ' (Sem estrada)' : ' (Estrada)') : ''}`;
+// Travels saved before road routing have one pace and a terrain; newer ones have road and off-road miles.
+const split = (t) => t.roadMi != null && usesRoads(t.method);
+const transport = (t) => `${t.methodName}${t.roadMi == null && usesRoads(t.method) ? (t.terrain === 'off' ? ' (Sem estrada)' : ' (Estrada)') : ''}`;
+const paceText = (t, unit) => (split(t) ? `${t.mpd} ${unit} (estrada) · ${t.mpdOff} ${unit} (sem estrada)` : `${t.mpd} ${unit}`);
 
 // ---------- State ----------
 
@@ -74,13 +84,15 @@ let el;
 let ctx;
 let map;
 let line;
+let offLine;
+let graph = null;
 let dots;
 let poiLayer;
 let tab = 'plan';
 let placing = false;
 let pois = [];
 const newDraft = () => ({
-  character: '', player: '', from: '', to: '', method: 'foot', terrain: 'road', methodName: 'A Pé', speed: 30, hours: 8, mpd: 32, travelers: 1, mounts: 0,
+  character: '', player: '', from: '', to: '', method: 'foot', methodName: 'A Pé', speed: 30, hours: 8, mpd: 32, mpdOff: 24, travelers: 1, mounts: 0,
   supplies: [{ k: 'food', name: 'Rações', qty: 0 }, { k: 'water', name: 'Água', qty: 0 }, { k: 'feed', name: 'Ração de Cavalo', qty: 0 }], points: [],
 });
 let store = { draft: newDraft(), travels: [], settings: { webhook: '', forum: true }, pois: [] };
@@ -92,19 +104,29 @@ const hook = () => (isWebhook(store.settings.webhook) ? store.settings.webhook.t
 
 const ll = (p) => [-p[1], p[0]]; // image pixel (x, y) to Leaflet's simple CRS
 
+/** The route with its road and off-road miles and the days it takes. Works on a draft or a saved travel. */
+function plan(d) {
+  const roads = usesRoads(d.method);
+  // Snapped waypoints are stored with a flag; their vertex is looked up again so saved routes survive a data update.
+  const pts = d.points.map((p) => (p[2] && graph ? [p[0], p[1], nearest(graph, p, 2)] : [p[0], p[1]]));
+  const r = trace(graph, pts, roads);
+  const roadMi = r.roadPx * MI_PER_PX;
+  const offMi = r.offPx * MI_PER_PX;
+  return { ...r, roadMi, offMi, miles: roadMi + offMi, days: daysFor(roadMi, offMi, d.mpd, roads ? d.mpdOff : d.mpd) };
+}
+
 function drawRoute() {
   const d = store.draft;
-  line.setLatLngs(d.points.map(ll));
+  const r = plan(d);
+  line.setLatLngs(r.legs.filter((l) => l.road).map((l) => l.line.map(ll)));
+  offLine.setLatLngs(r.legs.filter((l) => !l.road).map((l) => l.line.map(ll)));
   dots.clearLayers();
   d.points.forEach((p, i) => {
     const last = i === d.points.length - 1;
     const m = L.circleMarker(ll(p), { radius: i === 0 || last ? 6 : 4, color: '#fff', weight: 2, fillColor: '#b3261e', fillOpacity: 1, interactive: false }).addTo(dots);
-    if (last && i > 0) {
-      const mi = routeMiles(d.points);
-      m.bindTooltip(`${round(mi)} mi · ${daysFor(mi, d.mpd)} days`, { permanent: true, direction: 'top', offset: [0, -6] });
-    }
+    if (last && i > 0) m.bindTooltip(`${round(r.miles)} mi · ${r.days} days`, { permanent: true, direction: 'top', offset: [0, -6] });
   });
-  summary();
+  summary(r);
 }
 
 function drawPois() {
@@ -144,7 +166,9 @@ async function savePois() {
 
 function addPoint(p, name) {
   const d = store.draft;
-  d.points.push(p);
+  // A click close to a road (about 14 screen px) lands on it; the flag marks the waypoint as on the network.
+  const v = graph ? nearest(graph, p, Math.max(6, 14 / map.getZoomScale(map.getZoom(), 0))) : -1;
+  d.points.push(v < 0 ? p : [+graph.verts[v][0].toFixed(2), +graph.verts[v][1].toFixed(2), 1]);
   if (name) { if (d.points.length === 1) d.from = name; else d.to = name; renderForm(); }
   persist();
   drawRoute();
@@ -156,6 +180,7 @@ function initMap(node) {
   map.attributionControl.setPrefix(false).addAttribution('Faerûn map © Wizards of the Coast, via <a href="https://github.com/jonovotny/vectorized-realms" target="_blank" rel="noopener">vectorized-realms</a>. Unofficial Fan Content.');
   L.imageOverlay('img/faerun.jpg', bounds).addTo(map);
   line = L.polyline([], { color: '#b3261e', weight: 4, opacity: 0.9, interactive: false }).addTo(map);
+  offLine = L.polyline([], { color: '#b3261e', weight: 4, opacity: 0.9, dashArray: '2 9', interactive: false }).addTo(map);
   dots = L.layerGroup().addTo(map);
   poiLayer = L.layerGroup().addTo(map);
   map.on('click', (e) => {
@@ -165,9 +190,11 @@ function initMap(node) {
   });
   // Leaflet stops clicks inside popups from bubbling, so the section's click handler is attached to each one.
   map.on('popupopen', (e) => { e.popup.getElement().onclick = (ev) => { ev.stopPropagation(); onClick(ev); }; });
-  // The section starts hidden (size 0): fit the map the first time it gets a size.
+  // Keep the whole map in view through layout changes until the player first pans or zooms.
+  let touched = false;
+  for (const ev of ['pointerdown', 'wheel', 'keydown']) node.addEventListener(ev, () => { touched = true; }, { capture: true });
   let fitted = false;
-  new ResizeObserver(() => { map.invalidateSize(); if (!fitted && node.clientWidth) { fitted = true; map.fitBounds(bounds); } }).observe(node);
+  new ResizeObserver(() => { map.invalidateSize(); if (node.clientWidth && !(fitted && touched)) { fitted = true; map.fitBounds(bounds); } }).observe(node);
 }
 
 // ---------- Views ----------
@@ -179,15 +206,15 @@ function renderForm() {
   const fixed = !Array.isArray(METHODS[d.method].mi);
   el.querySelector('[data-form]').innerHTML = `
     <h2><span class="glyph">🧭</span> Travel log</h2>
-    <p class="hint">Click the map to trace your path. Click a gold marker to start or end at a point of interest.</p>
+    <p class="hint">Click the map to trace your path. Clicks on a road or trail follow it (solid line, road pace); anywhere else is a straight off-road line (dotted, off-road pace). Zoom in to click beside a road without snapping to it.</p>
     <div class="grid2">${field('Character', 'character', 'type="text" list="roster-names" autocomplete="off"')}${field('Player (Discord)', 'player', 'type="text" placeholder="@handle" autocomplete="off"')}</div>
     <div class="grid2">${field('Departure', 'from', 'type="text"')}${field('Destination', 'to', 'type="text"')}</div>
     <div class="grid2">
       <label class="field">Travel method<select data-f="method">${Object.entries(METHODS).map(([k, m]) => `<option value="${k}"${k === d.method ? ' selected' : ''}>${m.name}</option>`).join('')}</select></label>
-      ${fixed ? field('Name in the log', 'methodName', 'type="text"') : `<label class="field">Terrain<select data-f="terrain"><option value="road"${d.terrain === 'road' ? ' selected' : ''}>Road</option><option value="off"${d.terrain === 'off' ? ' selected' : ''}>Off-road</option></select></label>`}
+      ${field('Name in the log', 'methodName', 'type="text"')}
     </div>
-    <div class="grid3">${field('Speed (ft)', 'speed', 'type="number" min="0" step="5"')}${field('Hours per day', 'hours', 'type="number" min="1" max="24"')}${field('Miles per day', 'mpd', 'type="number" min="1"')}</div>
-    <p class="hint">Changing speed or hours recalculates miles per day (speed ÷ 10 per hour). You can also type miles per day directly.</p>
+    <div class="${fixed ? 'grid3' : 'grid4'}">${field('Speed (ft)', 'speed', 'type="number" min="0" step="5"')}${field('Hours / day', 'hours', 'type="number" min="1" max="24"')}${fixed ? field('Miles per day', 'mpd', 'type="number" min="1"') : field('Road mi/day', 'mpd', 'type="number" min="1"') + field('Off-road mi/day', 'mpdOff', 'type="number" min="1"')}</div>
+    <p class="hint">${fixed ? 'This method ignores roads: one pace, straight lines.' : 'Road miles use the road pace and the rest the off-road pace.'} Changing speed or hours recalculates the pace (speed ÷ 10 per hour); you can also type it directly.</p>
     <div class="grid2">${field('Travelers', 'travelers', 'type="number" min="1"')}${field('Mounts / animals', 'mounts', 'type="number" min="0"')}</div>
     <h3 class="sub">Supplies</h3>
     ${d.supplies.map((s, i) => `<div class="supply"><input type="text" data-s="${i}.name" value="${esc(s.name)}" aria-label="Supply name"><input type="number" min="0" data-s="${i}.qty" value="${esc(s.qty)}" aria-label="Quantity of ${esc(s.name)}"><button type="button" class="btn tiny danger" data-act="del-supply" data-i="${i}" aria-label="Remove ${esc(s.name)}">✕</button></div>`).join('')}
@@ -206,29 +233,30 @@ function renderForm() {
   summary();
 }
 
-function summary() {
+function summary(r = plan(store.draft)) {
   const d = store.draft;
   const box = el.querySelector('[data-summary]');
   if (!box) return;
   const m = METHODS[d.method];
-  const mi = routeMiles(d.points);
-  const days = daysFor(mi, d.mpd);
+  const { days } = r;
+  const roads = usesRoads(d.method);
   const cost = days * (m.cost * d.travelers + (m.mountCost || 0) * d.mounts);
   const warn = [];
+  if (r.gaps) warn.push('Two of your road points are not connected by the road network, so that stretch counts as off-road.');
   if (!m.noFood && days) {
     for (const s of d.supplies) {
       const need = days * (s.k === 'feed' ? d.mounts : s.k ? d.travelers : 0);
       if (s.qty < need) warn.push(`${s.name}: ${need} needed for ${days} days, you carry ${s.qty}.`);
     }
   }
-  box.innerHTML = `<div class="search-info"><span>Distance <b>${round(mi)} mi</b></span><span>Pace <b>${d.mpd || 0} mi/day</b></span><span>Rule cost <b>${money(cost)}</b></span><span class="bonus-total">Travel time <b>${days} days</b></span></div>
+  box.innerHTML = `<div class="search-info"><span>Distance <b>${round(r.miles)} mi</b></span>${roads ? `<span>Road <b>${round(r.roadMi)} mi</b> at ${d.mpd || 0}/day</span><span>Off-road <b>${round(r.offMi)} mi</b> at ${d.mpdOff || 0}/day</span>` : `<span>Pace <b>${d.mpd || 0} mi/day</b></span>`}<span>Rule cost <b>${money(cost)}</b></span><span class="bonus-total">Travel time <b>${days} days</b></span></div>
     ${warn.map((w) => `<p class="warn">⚠ ${esc(w)}</p>`).join('')}`;
 }
 
 function journeyCard(t) {
   const done = t.day >= t.total;
   return `<section class="card"><div class="row-between"><h2><span class="glyph">🧭</span> ${esc(t.character)} → ${esc(t.to)}</h2><button type="button" class="btn tiny danger" data-act="del-travel" data-id="${t.id}" aria-label="Delete this travel">✕</button></div>
-    <div class="search-info"><span>From <b>${esc(t.from)}</b></span><span>${esc(transport(t))} <b>${t.mpd} mi/day</b></span><span>Distance <b>${round(t.distance)} mi</b></span><span class="bonus-total">Day <b>${t.day} / ${t.total}</b>${done ? ' · arrived' : ''}</span></div>
+    <div class="search-info"><span>From <b>${esc(t.from)}</b></span><span>${esc(transport(t))} <b>${split(t) ? `${t.mpd} / ${t.mpdOff}` : t.mpd} mi/day</b></span><span>Distance <b>${round(t.distance)} mi</b>${split(t) ? ` (${round(t.roadMi)} road · ${round(t.offMi)} off-road)` : ''}</span><span class="bonus-total">Day <b>${t.day} / ${t.total}</b>${done ? ' · arrived' : ''}</span></div>
     <p class="hint">Supplies: ${esc(supplyText(t.supplies))} · Gold ${t.gp >= 0 ? '+' : ''}${t.gp} GP · XP +${t.xp} · Heroic inspiration +${t.inspiration}</p>
     ${t.events.map((e) => `<div class="log-entry"><b>Day ${e.day}</b> · d10 ${e.d10}: ${esc(e.name)}${e.text ? ` · d2 ${e.d2}: <span class="${e.d2 === 2 ? 'up' : 'down'}">${e.d2 === 2 ? 'Oportunidade' : 'Contratempo'}</span>: ${esc(e.text)}` : ''}</div>`).join('')}
     <div class="form-row end"><span class="status ${t.discord === 'sent' ? 'ok' : t.discord ? 'bad' : ''}">${t.discord === 'sent' ? '● Posted to Discord' : esc(t.discord || '○ Not posted')}</span><span class="grow"></span>
@@ -246,12 +274,14 @@ function render() {
 
 // ---------- Discord ----------
 
-async function routeImage(points) {
+async function routeImage(t) {
   const img = new Image();
   img.src = 'img/faerun.jpg';
   await img.decode();
-  const xs = points.map((p) => p[0]);
-  const ys = points.map((p) => p[1]);
+  const legs = t.legs || [{ road: true, line: t.points }];
+  const all = legs.flatMap((l) => l.line);
+  const xs = all.map((p) => p[0]);
+  const ys = all.map((p) => p[1]);
   const pad = 160;
   const x0 = Math.max(0, Math.min(...xs) - pad);
   const y0 = Math.max(0, Math.min(...ys) - pad);
@@ -263,11 +293,16 @@ async function routeImage(points) {
   c.height = h * k;
   const g = c.getContext('2d');
   g.drawImage(img, x0, y0, w, h, 0, 0, c.width, c.height);
-  const path = () => { g.beginPath(); points.forEach((p, i) => g[i ? 'lineTo' : 'moveTo']((p[0] - x0) * k, (p[1] - y0) * k)); g.stroke(); };
   g.lineJoin = 'round'; g.lineCap = 'round';
-  g.strokeStyle = '#fff'; g.lineWidth = 7; path();
-  g.strokeStyle = '#b3261e'; g.lineWidth = 4; path();
-  for (const p of [points[0], points.at(-1)]) { g.beginPath(); g.arc((p[0] - x0) * k, (p[1] - y0) * k, 7, 0, 7); g.fillStyle = '#b3261e'; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke(); }
+  for (const [color, width] of [['#fff', 7], ['#b3261e', 4]]) {
+    for (const l of legs) {
+      g.setLineDash(l.road ? [] : [2, 10]); // off-road stretches are dotted, as on the map
+      g.strokeStyle = color; g.lineWidth = width;
+      g.beginPath(); l.line.forEach((p, i) => g[i ? 'lineTo' : 'moveTo']((p[0] - x0) * k, (p[1] - y0) * k)); g.stroke();
+    }
+  }
+  g.setLineDash([]);
+  for (const p of [t.points[0], t.points.at(-1)]) { g.beginPath(); g.arc((p[0] - x0) * k, (p[1] - y0) * k, 7, 0, 7); g.fillStyle = '#b3261e'; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke(); }
   return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
 }
 
@@ -275,8 +310,8 @@ const logText = (t) => `**Personagem:** ${t.character}${t.player ? ` (${t.player
 **Partida:** ${t.from}
 **Destino:** ${t.to}
 
-**Transporte:** ${transport(t)} · ${t.mpd} milhas/dia
-**Distância:** ${round(t.distance)} milhas
+**Transporte:** ${transport(t)} · ${paceText(t, 'milhas/dia')}
+**Distância:** ${round(t.distance)} milhas${split(t) ? ` (${round(t.roadMi)} por estrada · ${round(t.offMi)} sem estrada)` : ''}
 **Provisões:** ${supplyText(t.supplies)}
 **Dias de Viagem:** ${t.day} / ${t.total}`;
 
@@ -344,21 +379,22 @@ async function onClick(e) {
     map.closePopup();
     await savePois();
   } else if (a === 'create') {
-    const miss = !d.character.trim() ? 'the character' : !d.from.trim() ? 'the departure' : !d.to.trim() ? 'the destination' : d.points.length < 2 ? 'a route on the map (at least two points)' : !(d.mpd > 0) ? 'the miles per day' : '';
+    const miss = !d.character.trim() ? 'the character' : !d.from.trim() ? 'the departure' : !d.to.trim() ? 'the destination' : d.points.length < 2 ? 'a route on the map (at least two points)' : !(d.mpd > 0) || (usesRoads(d.method) && !(d.mpdOff > 0)) ? 'the miles per day' : '';
     if (miss) return toast(`Enter ${miss} first.`, 'bad');
-    const distance = routeMiles(d.points);
-    const nt = { ...structuredClone(d), id: uid(), distance, total: daysFor(distance, d.mpd), day: 0, events: [], gp: 0, xp: 0, inspiration: 0 };
+    const r = plan(d);
+    const legs = r.legs.map((l) => ({ road: l.road, line: l.line.map((p) => [Math.round(p[0]), Math.round(p[1])]) }));
+    const nt = { ...structuredClone(d), id: uid(), distance: r.miles, roadMi: r.roadMi, offMi: r.offMi, legs, total: r.days, day: 0, events: [], gp: 0, xp: 0, inspiration: 0 };
     store.travels.unshift(nt);
     store.draft = { ...newDraft(), character: d.character, player: d.player };
     tab = 'journeys';
     persist(); renderForm(); drawRoute(); render();
-    await post(nt, logText(nt), await routeImage(nt.points));
+    await post(nt, logText(nt), await routeImage(nt));
   } else if (a === 'roll-day' && t) {
     const d10 = 1 + Math.floor(Math.random() * 10);
     const ev = applyDay(t, d10, 1 + Math.floor(Math.random() * 2));
     persist(); render();
     await post(t, dayText(t, ev));
-  } else if (a === 'repost' && t) await post(t, logText(t), await routeImage(t.points));
+  } else if (a === 'repost' && t) await post(t, logText(t), await routeImage(t));
   else if (a === 'del-travel' && t) { if (confirm('Delete this travel from your list? The Discord topic stays.')) { store.travels = store.travels.filter((x) => x !== t); persist(); render(); } }
 }
 
@@ -368,10 +404,15 @@ function onInput(e) {
   if (t.dataset.f) {
     const f = t.dataset.f;
     d[f] = t.type === 'number' ? Math.max(0, +t.value || 0) : t.value;
-    if (f === 'speed' || f === 'hours') { d.mpd = Math.round((d.speed / 10) * d.hours); el.querySelector('[data-f=mpd]').value = d.mpd; }
-    if (f === 'method' || f === 'terrain') {
+    const [road, off] = paces(d.method);
+    if (f === 'speed' || f === 'hours') {
+      d.mpd = Math.round((d.speed / 10) * d.hours);
+      d.mpdOff = Math.round((d.mpd * off) / road); // keep the method's own road to off-road ratio
+      for (const k of ['mpd', 'mpdOff']) { const i = el.querySelector(`[data-f=${k}]`); if (i) i.value = d[k]; }
+    }
+    if (f === 'method') {
       const m = METHODS[d.method];
-      Object.assign(d, { speed: m.speed, hours: m.hours, mpd: methodMiles(d.method, d.terrain), methodName: m.pt || d.methodName });
+      Object.assign(d, { speed: m.speed, hours: m.hours, mpd: road, mpdOff: off, methodName: m.pt || d.methodName });
       renderForm();
     }
     drawRoute();
@@ -388,6 +429,8 @@ export function mount(node, context) {
   el = node;
   ctx = context;
   try { store = { ...store, ...JSON.parse(localStorage.getItem(STORE) || '{}') }; } catch { /* keep defaults */ }
+  // A draft saved before road routing has one pace and a terrain: take both paces from its method.
+  if (store.draft.mpdOff == null && METHODS[store.draft.method]) { const [mpd, mpdOff] = paces(store.draft.method); Object.assign(store.draft, { mpd, mpdOff }); }
   store.draft = { ...newDraft(), ...store.draft };
   if (!store.draft.character) Object.assign(store.draft, { character: ctx.character().name, player: ctx.character().player });
   shell(el);
@@ -401,5 +444,7 @@ export function mount(node, context) {
   renderForm();
   render();
   drawRoute();
+  fetch('data/roads.json').then((r) => r.json()).then((data) => { graph = buildGraph(data); drawRoute(); })
+    .catch(() => toast('Could not load the road network; routes will be straight lines.', 'bad'));
   return loadPois();
 }

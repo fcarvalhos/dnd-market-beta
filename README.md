@@ -23,6 +23,7 @@ Static site: plain HTML, CSS and JS modules with no build step and no dataset. E
 - **Experience section:** the party roster with level progress bars, session XP awards and the session log. It syncs with the XP tracker's Google Sheet (`js/xp.js`).
 - **Factions section:** reputation per adventurer, faction relations with ripple effects and a chronicle. It syncs with the faction tracker's Google Sheet (`js/factions.js`), and the Company can be imported from the XP roster.
 - **Travel section** (`js/travel.js`): trace a route on the Faerûn map (0.8 miles per pixel, from the poster's scale bar) and get distance, days and cost by the table's travel rules. Preset and custom travel methods, supplies, DM points of interest, a Discord travel log with the route image, and the daily *Viagens Agitadas* rolls. To share points of interest, deploy `apps-script/travel-pois.gs` and paste its URL into `POI_API` in `js/travel.js`.
+- **Roads** (`js/roads.js`, `data/roads.json`): clicks on a road or trail snap to the road network and the route follows it; anything else is a straight off-road line. Travel time is road miles at the road pace plus off-road miles at the off-road pace, rounded up once. Ships and flying methods ignore roads.
 - **DM keys:** both sheets are read-only until the DM enters the key with the *DM key* button. Keys are stored in the browser, never in the code.
 - **Ledger** of every roll, with *Copy record* in the table's registration template.
 

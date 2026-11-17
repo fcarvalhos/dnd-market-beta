@@ -16,6 +16,9 @@ export function buildGraph(data, k = SVG_TO_PX) {
   for (const e of data.edges) {
     const pts = e.path.map((p) => [p[0] * k, p[1] * k]);
     let prev = index.get(e.a);
+    // About one path in six is stored from b to a: walk every path starting at node a.
+    const from = (p) => Math.hypot(p[0] - verts[prev][0], p[1] - verts[prev][1]);
+    if (from(pts.at(-1)) < from(pts[0])) pts.reverse();
     for (let i = 1; i < pts.length; i++) {
       const [x0, y0] = pts[i - 1];
       const [x1, y1] = pts[i];

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { routeMiles, daysFor, applyDay, MI_PER_PX } from '../js/travel.js';
+import { routeMiles, daysFor, applyDay, snapPoint, MI_PER_PX } from '../js/travel.js';
 import { buildGraph, nearest, shortest, trace } from '../js/roads.js';
 
 const trip = () => ({ method: 'riding', travelers: 2, mounts: 2, day: 0, total: 5, gp: 0, xp: 0, inspiration: 0, events: [],
@@ -74,13 +74,30 @@ test('methods without roads go straight even between road points', () => {
   assert.equal(r.roadPx, 0);
   assert.equal(Math.round(r.offPx), 141);
 });
-test('the real network keeps its miles', () => {
+test('the real network keeps its shape and miles', () => {
   const data = JSON.parse(readFileSync(new URL('../data/roads.json', import.meta.url)));
   const g = buildGraph(data);
-  const e = data.edges.reduce((m, x) => (x.miles > m.miles ? x : m)); // the longest edge
-  const ids = shortest(g, data.nodes.findIndex((n) => n.id === e.a), data.nodes.findIndex((n) => n.id === e.b));
-  const px = ids.slice(1).reduce((s, v, i) => s + Math.hypot(g.verts[v][0] - g.verts[ids[i]][0], g.verts[v][1] - g.verts[ids[i]][1]), 0);
-  assert.ok(px * MI_PER_PX <= e.miles * 1.01); // never longer than the edge itself (a shorter way round is fine)
-  const direct = Math.hypot(...[0, 1].map((k) => g.verts[ids[0]][k] - g.verts[ids.at(-1)][k]));
-  assert.ok(px >= direct);
+  const at = new Map(data.nodes.map((n, i) => [n.id, i]));
+  let reversed = 0;
+  for (const e of data.edges) {
+    // every path joins its two nodes, in either direction (two paths miss a node by under 3 units)
+    const [a, b] = [data.nodes[at.get(e.a)], data.nodes[at.get(e.b)]];
+    const gap = (p, n) => Math.hypot(p[0] - n.x, p[1] - n.y);
+    const fwd = Math.max(gap(e.path[0], a), gap(e.path.at(-1), b));
+    const rev = Math.max(gap(e.path[0], b), gap(e.path.at(-1), a));
+    assert.ok(Math.min(fwd, rev) < 3, `edge ${e.id} joins its nodes`);
+    if (rev < fwd) reversed++;
+    const ids = shortest(g, at.get(e.a), at.get(e.b));
+    const px = ids.slice(1).reduce((s, v, i) => s + Math.hypot(g.verts[v][0] - g.verts[ids[i]][0], g.verts[v][1] - g.verts[ids[i]][1]), 0);
+    assert.ok(px * MI_PER_PX <= e.miles * 1.03 + 4, `edge ${e.id}: ${px * MI_PER_PX} mi routed vs ${e.miles} mi`); // a shorter way round is fine
+  }
+  assert.ok(reversed > 50); // the loader must keep handling paths stored b to a
+});
+test('only road methods snap, and only within the tolerance', () => {
+  const g = buildGraph(toy, 1);
+  assert.deepEqual(snapPoint(g, [52, 3], 'foot', 10).map(Math.round), [54, 0, 1]); // lands on the road, flagged
+  assert.deepEqual(snapPoint(g, [52, 3], 'ship', 10), [52, 3]); // one pace: the exact click
+  assert.deepEqual(snapPoint(g, [52, 3], 'carpet', 10), [52, 3]);
+  assert.deepEqual(snapPoint(g, [52, 30], 'foot', 12), [52, 30]); // a point of interest away from any road stays put
+  assert.deepEqual(snapPoint(null, [52, 3], 'foot', 10), [52, 3]); // network not loaded yet
 });

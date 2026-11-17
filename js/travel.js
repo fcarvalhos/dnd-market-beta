@@ -10,6 +10,7 @@ export const MI_PER_PX = 0.8; // the poster is 150 px per inch at 1 inch = 120 m
 const POI_API = ''; // Apps Script web app URL of the points-of-interest sheet (apps-script/travel-pois.gs). Empty = this browser only
 const KEY = 'travelKey';
 const STORE = 'gilded-travel-v1';
+const SNAP_MAX = 40; // map px (32 miles): the furthest a click is pulled onto a road, however far out the map is zoomed
 
 // mi: [road, off-road] or one number when roads don't matter. Costs are copper per day: per traveler / per mount.
 export const METHODS = {
@@ -164,11 +165,18 @@ async function savePois() {
   try { pois = (await sheet(POI_API, { key: getKey(KEY), pois })).pois || pois; } catch (e) { toast(`Save failed: ${e.message}`, 'bad'); await loadPois(); }
 }
 
-function addPoint(p, name) {
+/**
+ * The waypoint to store for a click at p: on the road network (flagged) when the method uses roads
+ * and a road is within `tol` map px, otherwise the exact click. Ships and flyers never snap.
+ */
+export function snapPoint(g, p, method, tol) {
+  const v = g && usesRoads(method) ? nearest(g, p, tol) : -1;
+  return v < 0 ? p : [+g.verts[v][0].toFixed(2), +g.verts[v][1].toFixed(2), 1];
+}
+
+function addPoint(p, name, tol = Math.min(SNAP_MAX, Math.max(6, 14 / map.getZoomScale(map.getZoom(), 0)))) {
   const d = store.draft;
-  // A click close to a road (about 14 screen px) lands on it; the flag marks the waypoint as on the network.
-  const v = graph ? nearest(graph, p, Math.max(6, 14 / map.getZoomScale(map.getZoom(), 0))) : -1;
-  d.points.push(v < 0 ? p : [+graph.verts[v][0].toFixed(2), +graph.verts[v][1].toFixed(2), 1]);
+  d.points.push(snapPoint(graph, p, d.method, tol));
   if (name) { if (d.points.length === 1) d.from = name; else d.to = name; renderForm(); }
   persist();
   drawRoute();
@@ -206,7 +214,7 @@ function renderForm() {
   const fixed = !Array.isArray(METHODS[d.method].mi);
   el.querySelector('[data-form]').innerHTML = `
     <h2><span class="glyph">🧭</span> Travel log</h2>
-    <p class="hint">Click the map to trace your path. Clicks on a road or trail follow it (solid line, road pace); anywhere else is a straight off-road line (dotted, off-road pace). Zoom in to click beside a road without snapping to it.</p>
+    <p class="hint">Click the map to trace your path. Clicks on a road or trail follow it (solid line, road pace); anywhere else is a straight off-road line (dotted, off-road pace). A click within about 30 miles of a road lands on it; zoom in to place a point beside a road.</p>
     <div class="grid2">${field('Character', 'character', 'type="text" list="roster-names" autocomplete="off"')}${field('Player (Discord)', 'player', 'type="text" placeholder="@handle" autocomplete="off"')}</div>
     <div class="grid2">${field('Departure', 'from', 'type="text"')}${field('Destination', 'to', 'type="text"')}</div>
     <div class="grid2">
@@ -368,7 +376,7 @@ async function onClick(e) {
   else if (a === 'add-supply') { d.supplies.push({ name: '', qty: 0 }); persist(); renderForm(); }
   else if (a === 'del-supply') { d.supplies.splice(+b.dataset.i, 1); persist(); renderForm(); }
   else if (a === 'place') { placing = true; el.querySelector('.travel-map').classList.add('placing'); toast('Click the map where the new location is.'); }
-  else if (a === 'poi-route' && poi) { map.closePopup(); addPoint([poi.x, poi.y], poi.name); }
+  else if (a === 'poi-route' && poi) { map.closePopup(); addPoint([poi.x, poi.y], poi.name, 12); }
   else if (a === 'poi-edit' && poi) poiForm(poi);
   else if (a === 'poi-del' && poi) { if (confirm(`Delete “${poi.name}”?`)) { pois = pois.filter((x) => x !== poi); map.closePopup(); await savePois(); } }
   else if (a === 'poi-save') {

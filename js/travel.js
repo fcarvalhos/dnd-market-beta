@@ -1,7 +1,7 @@
 // Travel section: trace a route on the Faerûn map, plan the journey by the table's travel rules,
 // post the travel log to Discord and roll the daily "Viagens Agitadas" events.
 import { esc, uid, toast, getKey, askKey, sheet, shell, tabs, setStatus } from './sheet.js';
-import { isWebhook, BUILT_IN } from './discord.js';
+import { isWebhook, canPost, send, BUILT_IN } from './discord.js';
 import { buildGraph, nearest, trace } from './roads.js';
 
 const W = 4763;
@@ -334,18 +334,15 @@ function dayText(t, e) {
 /** Posts to the travel's topic (creating it on the first post in a forum channel). */
 async function post(t, content, file, retried) {
   const url = hook();
-  if (!isWebhook(url)) { t.discord = '○ No Discord webhook set'; return; }
+  if (!canPost(url)) { t.discord = '○ No Discord webhook set'; return; }
   const title = `${t.character} viaja para ${t.to}`;
   const payload = { allowed_mentions: { parse: [] } };
   if (t.thread) payload.content = content;
   else if (store.settings.forum) Object.assign(payload, { content, thread_name: title.slice(0, 100) });
   else payload.content = `## ${title}\n${content}`;
-  const body = new FormData();
-  body.append('payload_json', JSON.stringify(payload));
-  if (file) body.append('files[0]', file, 'rota.jpg');
   try {
-    const r = await fetch(`${url}?wait=true${t.thread ? `&thread_id=${t.thread}` : ''}`, { method: 'POST', body });
-    const j = await r.json().catch(() => ({}));
+    const { ok, status, json: j } = await send(url, payload, { file, thread: t.thread });
+    const r = { ok, status };
     // Discord's 2200xx errors mean the forum / text channel guess was wrong: flip it and try once more.
     if (!r.ok && !t.thread && !retried && String(j.code).startsWith('2200')) { store.settings.forum = !store.settings.forum; return post(t, content, file, true); }
     if (!r.ok) throw new Error(j.message || `Discord answered ${r.status}`);

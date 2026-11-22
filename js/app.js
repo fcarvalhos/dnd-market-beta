@@ -1,6 +1,6 @@
 import { RARITIES, rarityOf, searchBonus, staticModifier, SKILLS, SKILL_LABEL, ABILITY_LABEL, fmt, num } from './engine.js';
 import { MODES, runFlow, estimateFlow, buildRecord, recordText, isMagicSale } from './flows.js';
-import { isWebhook, postRecord, postTest, BUILT_IN } from './discord.js';
+import { isWebhook, canPost, postRecord, postTest, BUILT_IN } from './discord.js';
 import { esc, toast } from './sheet.js';
 import * as xp from './xp.js';
 import * as factions from './factions.js';
@@ -116,7 +116,7 @@ function renderCharacter() {
 
 function renderSettings(status = '') {
   const s = state.settings;
-  const ok = isWebhook(hook());
+  const ok = canPost(hook());
   $('#settings').innerHTML = `
     <h2><span class="glyph">✉</span> Discord Raven</h2>
     <label class="field">Channel webhook URL
@@ -383,7 +383,7 @@ function renderResult(rec, animate = false) {
       <span id="result-discord">${discordStatus(rec)}</span>
       <span class="btns">
         <button type="button" class="btn ghost" data-action="copy" data-id="${rec.id}">⎘ Copy record</button>
-        <button type="button" class="btn gold" data-action="post" data-id="${rec.id}" ${isWebhook(hook()) ? '' : 'disabled title="Add a webhook in Discord Raven first"'}>✉ Post to Discord</button>
+        <button type="button" class="btn gold" data-action="post" data-id="${rec.id}" ${canPost(hook()) ? '' : 'disabled title="Add a webhook in Discord Raven first"'}>✉ Post to Discord</button>
       </span>
     </div>`;
   if (animate) {
@@ -434,7 +434,7 @@ function doRoll() {
   renderResult(rec, true);
   renderHistory();
   refreshDerived();
-  if (state.settings.autoPost && isWebhook(hook())) postRec(rec);
+  if (state.settings.autoPost && canPost(hook())) postRec(rec);
 }
 
 async function postRec(rec) {
@@ -475,7 +475,7 @@ function rerender(what) {
       renderObjective();
     }
     if (w === 'settings-status') {
-      const ok = isWebhook(hook());
+      const ok = canPost(hook());
       const st = $('#webhook-status');
       st.className = `status ${state.settings.webhook && !isWebhook(state.settings.webhook) ? 'bad' : ok ? 'ok' : ''}`;
       st.textContent = hookStatus();

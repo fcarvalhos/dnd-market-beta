@@ -37,7 +37,7 @@ Static site: plain HTML, CSS and JS modules with no build step and no dataset. E
 
 In your server: **Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL**. In the app, paste it into **Discord Raven** and click *Send test*.
 
-The table's Market and Travel webhooks are built in (`BUILT_IN` in `js/discord.js`), so players paste nothing; a webhook a player pastes overrides them in that browser only. The built-in URLs are public with the site: if a channel gets spammed, delete that webhook in Discord and replace it in the code.
+The table's Market and Travel channels go through a relay, so players paste nothing and the webhook URLs never reach the site. Deploy `apps-script/discord-relay.gs` (setup steps at the top of the file), store the webhooks in its Script properties, and paste the web app URL into `RELAY` in `js/discord.js`. A webhook a player pastes overrides the relay in that browser only. To change a channel, edit the Script property; the site does not change.
 
 ## Homebrew JSON format
 

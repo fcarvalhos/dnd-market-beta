@@ -5,11 +5,40 @@ import { MODES } from './flows.js';
 const WEBHOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+\/?$/;
 export const isWebhook = (url) => WEBHOOK_RE.test(String(url || '').trim());
 // The table's channels, used when a player has not pasted a webhook of their own.
-// These URLs are public with the site: if a channel gets spammed, delete the webhook in Discord and replace it here.
-export const BUILT_IN = {
-  market: 'https://discord.com/api/webhooks/1571683957760852019/UV_YwZ_pN0dUghyPfCmUQ0hiHrtts-Bv9NpXZD5wXV44zLFxY8GgOFhOt1WU2GB8G5nX',
-  travel: 'https://discord.com/api/webhooks/1571643740131430462/2UNwwO2ZS7phESQK8pnb__s0kwrfanGVIiVVpCUnSFZhDCREjwehpSh1uvsu22-viJlf',
-};
+// They go through a relay (apps-script/discord-relay.gs) that holds the webhook URLs, so the site never shows them.
+export const RELAY = '';
+export const BUILT_IN = RELAY ? { market: 'table:market', travel: 'table:travel' } : {};
+export const canPost = (t) => isWebhook(t) || (!!RELAY && /^table:(market|travel)$/.test(t));
+
+async function toBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** Sends one message, straight to a webhook or through the relay. Resolves to { ok, status, json }. */
+export async function send(target, payload, { file, thread } = {}) {
+  if (isWebhook(target)) {
+    const url = `${target.trim().replace(/\/$/, '')}?wait=true${thread ? `&thread_id=${thread}` : ''}`;
+    let init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
+    if (file) {
+      const body = new FormData();
+      body.append('payload_json', JSON.stringify(payload));
+      body.append('files[0]', file, 'rota.jpg');
+      init = { method: 'POST', body };
+    }
+    const r = await fetch(url, init);
+    return { ok: r.ok, status: r.status, json: await r.json().catch(() => ({})) };
+  }
+  if (!canPost(target)) throw new Error('No Discord channel set.');
+  const req = { channel: target.slice(6), payload, thread };
+  if (file) req.file = { b64: await toBase64(file) };
+  // No content-type header, so the browser sends it without a CORS preflight (Apps Script cannot answer one).
+  const r = await fetch(RELAY, { method: 'POST', body: JSON.stringify(req) });
+  const { status = r.status, body = {} } = await r.json().catch(() => ({}));
+  return { ok: status >= 200 && status < 300, status, json: body };
+}
 
 const COLORS = { great: 0xf1c40f, success: 0x4caf6a, partial: 0xd9893b, fail: 0xc0392b };
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -52,17 +81,9 @@ export function buildPayload(rec) {
 }
 
 export async function postPayload(url, payload) {
-  if (!isWebhook(url)) throw new Error('That is not a Discord webhook URL (https://discord.com/api/webhooks/…).');
-  const res = await fetch(`${url.trim().replace(/\/$/, '')}?wait=true`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j.message) msg += `: ${j.message}`; } catch { /* ignore */ }
-    throw new Error(`Discord refused the post (${msg}).`);
-  }
+  if (!canPost(url)) throw new Error('That is not a Discord webhook URL (https://discord.com/api/webhooks/…).');
+  const r = await send(url, payload);
+  if (!r.ok) throw new Error(`Discord refused the post (${r.status}${r.json.message ? `: ${r.json.message}` : ''}).`);
   return true;
 }
 

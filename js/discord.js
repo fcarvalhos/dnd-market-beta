@@ -6,7 +6,7 @@ const WEBHOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/w
 export const isWebhook = (url) => WEBHOOK_RE.test(String(url || '').trim());
 // The table's channels, used when a player has not pasted a webhook of their own.
 // They go through a relay (apps-script/discord-relay.gs) that holds the webhook URLs, so the site never shows them.
-export const RELAY = '';
+export const RELAY = 'https://script.google.com/macros/s/AKfycbyvEFQvRT0T_7_AGSYaGhma8Up5oP28sy3ZjxZc0Aqci6h-AoB6BAwPspzkz3b1AxBqxg/exec';
 export const BUILT_IN = RELAY ? { market: 'table:market', travel: 'table:travel' } : {};
 export const canPost = (t) => isWebhook(t) || (!!RELAY && /^table:(market|travel)$/.test(t));
 
